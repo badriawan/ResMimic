@@ -29,6 +29,7 @@
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
 import os
+from itertools import count
 from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.envs import *
 from legged_gym.gym_utils import get_args, task_registry
@@ -102,7 +103,22 @@ def full_obs_to_base_obs(env_cfg, obs):
 
 def play(args):
     faulthandler.enable()
-    log_pth = "../../logs/{}/".format(args.proj_name) + args.exptid
+    local_checkpoint = None
+    if args.checkpoint_path:
+        if args.use_jit:
+            raise ValueError("--checkpoint_path loads a training checkpoint; do not combine it with --use_jit")
+        local_checkpoint = Path(args.checkpoint_path).expanduser().resolve(strict=True)
+        if not local_checkpoint.is_file() or local_checkpoint.suffix != '.pt':
+            raise ValueError(f"Expected a local .pt checkpoint file: {local_checkpoint}")
+        if not os.access(local_checkpoint, os.R_OK):
+            raise PermissionError(f"Checkpoint is not readable: {local_checkpoint}")
+        args.resume = False
+        args.resumeid = None
+        args.eval_student = True
+        args.teacher_exptid = "None"
+    log_pth = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", args.proj_name, args.exptid)
+    if local_checkpoint is not None:
+        log_pth = str(local_checkpoint.parent)
 
     
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
@@ -128,7 +144,8 @@ def play(args):
     obs = env.get_observations()
 
     # load policy
-    train_cfg.runner.resume = True
+    train_cfg.runner.resume = local_checkpoint is None
+    normalizer = None
 
     base_policy_jit = torch.jit.load(f"{LEGGED_GYM_ROOT_DIR}/{args.base_policy_path}", map_location=env.device)
 
@@ -139,7 +156,11 @@ def play(args):
         print("Loading jit for policy: ", path)
         policy_jit = torch.jit.load(path, map_location=env.device)
     else:
-        if args.wandb_run_id and args.checkpoint is not None:
+        if local_checkpoint is not None:
+            ppo_runner, train_cfg = task_registry.make_alg_runner(
+                log_root=None, env=env, name=args.task, args=args, train_cfg=train_cfg)
+            ppo_runner.load(str(local_checkpoint), load_optimizer=False)
+        elif args.wandb_run_id and args.checkpoint is not None:
             wandb_run_path = f"{args.wandb_entity}/{args.wandb_project}/{args.wandb_run_id}"
             api = wandb.Api()
             run = api.run(wandb_run_path)
@@ -155,7 +176,8 @@ def play(args):
                 checkpoint_file = run.file(checkpoint_name)  # Get the specific checkpoint file
                 checkpoint_file.download(root=log_pth)
 
-        ppo_runner, train_cfg, log_pth = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args, train_cfg=train_cfg, return_log_dir=True)
+        if local_checkpoint is None:
+            ppo_runner, train_cfg, log_pth = task_registry.make_alg_runner(log_root=log_pth, env=env, name=args.task, args=args, train_cfg=train_cfg, return_log_dir=True)
         policy = ppo_runner.get_inference_policy(device=env.device)
         if if_normalize:
             try:
@@ -174,7 +196,7 @@ def play(args):
         for i in range(env.num_envs):
             video_name = args.proj_name + "-" + args.exptid +".mp4"
             run_name = log_pth.split("/")[-1]
-            path = f"../../logs/videos_retarget/{run_name}"
+            path = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", "videos_retarget", run_name)
             if not os.path.exists(path):
                 os.makedirs(path)
             video_name = os.path.join(path, video_name)
@@ -187,57 +209,64 @@ def play(args):
         run_name = log_pth.split("/")[-1]
         logs_dict = []
         dict_name = args.proj_name + "-" + args.exptid + ".json"
-        path = f"../../logs/env_logs/{run_name}"
+        path = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", "env_logs", run_name)
         if not os.path.exists(path):
             os.makedirs(path)
         dict_name = os.path.join(path, dict_name)
         
     
-    if not (args.record_video or args.record_log):
-        traj_length = 100*int(env.max_episode_length)
-    else:
+    if args.eval_steps is not None:
+        traj_length = args.eval_steps
+    elif args.record_video or args.record_log:
         traj_length = 2 * int(env.max_episode_length)
-    
-    traj_length = 400
+    elif args.headless:
+        traj_length = 400
+    else:
+        traj_length = None
 
-    for i in tqdm(range(traj_length)):
-        if args.use_jit:
-            base_actions = base_policy_jit(full_obs_to_base_obs(env_cfg, obs.detach()))
-            actions = policy_jit(obs.detach()) + base_actions
-        else:
-            if if_normalize and normalizer is not None:
-                normalized_obs = normalizer.normalize(obs.detach())
-            else:
-                normalized_obs = obs.detach()
-            base_actions = base_policy_jit(full_obs_to_base_obs(env_cfg, obs.detach()))
-            actions = policy(normalized_obs, hist_encoding=True) + base_actions
-            
-        if "AMP" in env.__class__.__name__:
-            obs, _, rews, dones, info0s, _, _ = env.step(actions.detach())
-        else:
-            obs, _, rews, dones, infos = env.step(actions.detach())
-            
+    steps = range(traj_length) if traj_length is not None else count()
+    try:
+        for i in tqdm(steps, total=traj_length):
+            if env.viewer is not None and env.gym.query_viewer_has_closed(env.viewer):
+                break
+            with torch.inference_mode():
+                if args.use_jit:
+                    base_actions = base_policy_jit(full_obs_to_base_obs(env_cfg, obs.detach()))
+                    actions = policy_jit(obs.detach()) + base_actions
+                else:
+                    if if_normalize and normalizer is not None:
+                        normalized_obs = normalizer.normalize(obs.detach())
+                    else:
+                        normalized_obs = obs.detach()
+                    base_actions = base_policy_jit(full_obs_to_base_obs(env_cfg, obs.detach()))
+                    actions = policy(normalized_obs, hist_encoding=True) + base_actions
+
+                if "AMP" in env.__class__.__name__:
+                    obs, _, rews, dones, info0s, _, _ = env.step(actions.detach())
+                else:
+                    obs, _, rews, dones, infos = env.step(actions.detach())
+
+            if args.record_video:
+                imgs = env.render_record(mode='rgb_array')
+                if imgs is not None:
+                    for env_id in range(env.num_envs):
+                        mp4_writers[env_id].append_data(imgs[env_id])
+
+            if args.record_log:
+                log_dict = env.get_episode_log()
+                logs_dict.append(log_dict)
+
+            # Interaction
+            if env.button_pressed:
+                print(f"env_id: {env.lookat_id:<{5}}")
+    finally:
         if args.record_video:
-            imgs = env.render_record(mode='rgb_array')
-            if imgs is not None:
-                for i in range(env.num_envs):
-                    mp4_writers[i].append_data(imgs[i])
-                    
+            for mp4_writer in mp4_writers:
+                mp4_writer.close()
+
         if args.record_log:
-            log_dict = env.get_episode_log()
-            logs_dict.append(log_dict)
-        
-        # Interaction
-        if env.button_pressed:
-            print(f"env_id: {env.lookat_id:<{5}}")
-    
-    if args.record_video:
-        for mp4_writer in mp4_writers:
-            mp4_writer.close()
-            
-    if args.record_log:
-        with open(dict_name, 'w') as f:
-            json.dump(logs_dict, f)
+            with open(dict_name, 'w') as f:
+                json.dump(logs_dict, f)
     
 
 if __name__ == '__main__':

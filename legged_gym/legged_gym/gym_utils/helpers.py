@@ -260,6 +260,13 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
 
     return env_cfg, cfg_train
 
+def positive_int(value):
+    result = int(value)
+    if result <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return result
+
+
 def get_args():
     custom_parameters = [
         {"name": "--task", "type": str, "default": "h1_mimic", "help": "Resume training or start testing from a checkpoint. Overrides config file if provided."},
@@ -268,6 +275,8 @@ def get_args():
         {"name": "--run_name", "type": str,  "help": "Name of the run. Overrides config file if provided."},
         {"name": "--load_run", "type": str,  "help": "Name of the run to load when resume=True. If -1: will load the last run. Overrides config file if provided."},
         {"name": "--checkpoint", "type": int, "default": -1, "help": "Saved model checkpoint number. If -1: will load the last checkpoint. Overrides config file if provided."},
+        {"name": "--checkpoint_path", "type": str, "default": None, "help": "Local residual .pt checkpoint to load for evaluation without W&B."},
+        {"name": "--eval_steps", "type": positive_int, "default": None, "help": "Stop evaluation after this many simulation steps. Otherwise keep the viewer open."},
         
         {"name": "--headless", "action": "store_true", "default": False, "help": "Force display off at all times"},
         {"name": "--horovod", "action": "store_true", "default": False, "help": "Use horovod for multi-gpu training"},

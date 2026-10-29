@@ -43,10 +43,7 @@ def train(args):
     args.headless = True
     
     log_pth = LEGGED_GYM_ROOT_DIR + "/logs/{}/".format(args.proj_name) + args.exptid
-    try:
-        os.makedirs(log_pth)
-    except:
-        pass
+    os.makedirs(log_pth, exist_ok=True)
     
     if args.debug:
         mode = "disabled"
@@ -64,9 +61,13 @@ def train(args):
     robot_type = args.task.split("_")[0]
     
     try:
-        wandb.init(entity=args.wandb_entity, project="resmimic", name=args.exptid, mode=mode, dir="../../logs")
-    except:
-        pass
+        wandb.init(entity=args.wandb_entity or None, project="resmimic", name=args.exptid, mode=mode, dir=log_pth)
+    except Exception as exc:
+        raise RuntimeError(
+            f"W&B initialization failed for entity {args.wandb_entity!r}. "
+            "Use your W&B username/team, or run ./train.sh without arguments "
+            "to train locally without W&B."
+        ) from exc
     
     env, _ = task_registry.make_env(name=args.task, args=args)
     print(f"Using motion file: {env.cfg.motion.motion_file}")

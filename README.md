@@ -45,17 +45,54 @@ Train the residual policy with the provided config. You need to pass your Weight
 
 Example: `./train.sh my_username`
 
-### Evaluation
+### Background training with TensorBoard
 
-Run evaluation (play) for a trained run. From the repository root:
+Run locally without W&B, detached from the terminal and blocking sleep/idle while training:
 
 ```bash
-./eval.sh <wandb_run_id> <checkpoint_iter>
+./train_tensorboard_bg.sh
+./train_tensorboard_bg.sh status
+./train_tensorboard_bg.sh stop
 ```
 
-Example: `./eval.sh abc123def 5000` runs evaluation for run `abc123def` at checkpoint iteration 5000.
+Open TensorBoard at `http://localhost:6006`. Each run has its own directory in
+`legged_gym/logs/resmimic_suitcase/`, containing checkpoints, `train.log`,
+`tensorboard.log`, and TensorBoard events in `tensorboard/`. TensorBoard and the
+sleep inhibitor stop when training exits. Forced shutdown is not prevented.
+TensorBoard 2.14 (Python 3.8) requires `protobuf<5` for its dashboard API;
+this compatibility constraint is included in `rsl_rl` dependencies.
 
-Optional: uncomment `--record_video` in `eval.sh` to save videos.
+Optional settings, including a short trial:
+
+```bash
+./train_tensorboard_bg.sh --name trial --num-envs 16 --max-iterations 2 --port 6007
+```
+
+Uses `systemd-inhibit` (systemd), falling back to `gnome-session-inhibit` if
+systemd denies permission. If neither inhibitor works, training does not start.
+The GNOME fallback protects against desktop-session suspend/idle while that
+session remains logged in. Run from your logged-in desktop session. Also requires
+`flock`, `setsid`, and the project environment.
+
+### Evaluation
+
+Display the latest local checkpoint from the last background run:
+
+```bash
+./eval.sh
+```
+
+Or pass a specific checkpoint: `./eval.sh /path/to/model_16500.pt`.
+The simulator remains open until its window is closed or Esc is pressed.
+For a short headless check: `./eval.sh --headless --eval_steps 20`.
+Evaluation uses the residual checkpoint plus the provided base policy, without W&B.
+
+Use `./eval.sh --record_video` to save a finite video. The Python evaluator also
+retains its W&B loading arguments for online runs.
+
+To view saved graphs after stopping training, run `./tensorboard.sh --port 6008`
+in a separate terminal and open `http://localhost:6008/#scalars`.
+Stop that server with Ctrl+C; this does not start or stop training or evaluation.
 
 ---
 

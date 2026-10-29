@@ -19,3 +19,33 @@ pip install -e .
 
 
 
+
+## Added Command
+
+Jalankan:
+
+./train_tensorboard_bg.sh
+
+Training berjalan di background tanpa W&B, tetap hidup saat terminal ditutup, dan menahan suspend menggunakan systemd-inhibit.
+
+TensorBoard: http://localhost:6006
+
+Cek dan hentikan:
+
+./train_tensorboard_bg.sh status
+./train_tensorboard_bg.sh stop
+
+Model, log, dan event TensorBoard disimpan per run di:
+
+legged_gym/logs/resmimic_suitcase/<nama_run>/
+
+Sudah diuji dengan training singkat, metrik TensorBoard, dan fungsi stop. Semua proses pengujian sudah dihentikan.
+  Worked for 5m 14s • 19:04
+
+berapa banyak iterasi trainingnya?
+
+Defaultnya 500.000 iterasi, dengan 4.096 lingkungan simulasi sekaligus.
+
+Untuk mengubah jumlahnya, misalnya menjadi 10.000:
+
+./train_tensorboard_bg.sh --max-iterations 10000

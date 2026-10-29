@@ -34,7 +34,6 @@ from collections import deque
 import statistics
 from rich import print
 
-# from torch.utils.tensorboard import SummaryWriter
 import torch
 import torch.optim as optim
 import wandb
@@ -233,6 +232,14 @@ class OnPolicyDaggerRunner:
         return base_obs
 
     def learn_RL(self, num_learning_iterations, init_at_random_ep_len=False):
+        try:
+            return self._learn_RL(num_learning_iterations, init_at_random_ep_len)
+        finally:
+            if self.writer is not None:
+                self.writer.close()
+                self.writer = None
+
+    def _learn_RL(self, num_learning_iterations, init_at_random_ep_len=False):
         mean_value_loss = 0.
         mean_surrogate_loss = 0.
         mean_disc_loss = 0.
@@ -425,6 +432,13 @@ class OnPolicyDaggerRunner:
             wandb_dict['Train/mean_episode_length'] = statistics.mean(locs['lenbuffer'])
             # wandb_dict['Train/mean_reward/time', statistics.mean(locs['rewbuffer']), self.tot_time)
             # wandb_dict['Train/mean_episode_length/time', statistics.mean(locs['lenbuffer']), self.tot_time)
+
+        if self.writer is None:
+            from torch.utils.tensorboard import SummaryWriter
+            self.writer = SummaryWriter(log_dir=os.path.join(self.log_dir, 'tensorboard'))
+        for tag, value in wandb_dict.items():
+            self.writer.add_scalar(tag, value, global_step=locs['it'])
+        self.writer.flush()
 
         wandb.log(wandb_dict, step=locs['it'])
 
